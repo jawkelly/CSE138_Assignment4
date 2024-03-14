@@ -392,6 +392,8 @@ if __name__ == '__main__':
         shard_count = int(os.environ.get('SHARD_COUNT'))
     except:
         print("Shard_count not specified, wait for add-member request")
+    ####
+    #is this supposed to be on this line? shard count is still 0 at this point for new replicas
     shards = {i: [] for i in range(shard_count)} #initializes shards list, maps shard_count amount of shards to empty lists
     shard_id = 0
     #Iterate through our shard dictionary adding each node to one shard at a time for even distribution
