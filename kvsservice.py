@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 import requests
 import os
 import logging
+import hashlib
 
 app = Flask(__name__)
 
@@ -53,6 +54,15 @@ class VectorClock: # view is Vector Clock
                 #     raise KeyError(f"Key: {replica_address} from local clock not in message vc. // update_from_message()")     
         return True
         
+def forwarding_request(method, key, fwdaddress):
+        url = f"http://{fwdaddress}/kvs/{key}"  #format url that we will forward to
+        try:
+            #forward request to url, store response
+            response = requests.request(method, url, headers=request.headers, data=request.get_data())
+            return response.json(), response.status_code        #return response
+        except: #case of failure
+            return jsonify({"error": "Cannot forward request"}), 503
+
 ## Used to broadcast a new replica's address to all replicas in its initial view
 def broadcast_put_view(sentaddress):
     data = {'socket-address': sentaddress}
@@ -102,10 +112,12 @@ def broadcast_delete_view(sent_address):
             except requests.exceptions.RequestException as e:
                 print(f'broadcast_delete_view error: exception raised: {e}')
 
-def broadcast_to_replicas(method, key, data):
+def broadcast_to_replicas(method, key, data, shard_id):
     # format data for sending to other replicas
     data["causal-metadata"]= {"senders-address": socket_address, "message-clock": vc.clock}
-    for replica in replicas:
+
+    #Broadcast request to replicas in shard_id
+    for replica in shards[shard_id]:
         if replica != socket_address:
             try:
                 replica_url = f'http://{replica}/replica_kvs/{key}'
@@ -113,6 +125,18 @@ def broadcast_to_replicas(method, key, data):
             except requests.exceptions.RequestException as e:
                 broadcast_delete_view(replica)
                 app.logger.debug(f'broadcast_to_replicas error: exception raised: {e}')
+
+    #Broadcast update to metadata for all non-shard_id replicas
+    for other_id, other_id_replicas in shards.items():
+        if other_id != shard_id:    #Request goes to all shards that aren't shard_id
+            for replica in other_id_replicas:
+                try:
+                    url = f'http://{replica}/update_metadata'
+                    requests.put(url, json={"causal-metadata": data["causal-metadata"]})
+                except requests.exceptions.RequestException as e:
+                    broadcast_delete_view(replica)
+                    app.logger.debug(f'broadcast_to_replicas error: exception raised: {e}')
+
         
 def handle_client_metadata(metadata):
     if metadata == None: # clients first request so the causal-metadata is null
@@ -141,6 +165,11 @@ def handle_replica_metadata(metadata):
     else:
         return False
     #for checking causal consistency of passed in metadata
+
+#Shard assignment by hash of key, each key is assigned a unique shard based on its keyhash
+def hash_of_key(key):
+    keyhash = int(hashlib.md5(key.encode('utf-8')).hexdigest(), 16)
+    return keyhash % shard_count
 
 @app.route('/getall', methods=['GET'])
 def getall():
@@ -195,7 +224,13 @@ def kvs(key):
         return jsonify({"error": "Key is too long"}), 400
     
     print("here in kvs")
-
+    shard_id = hash_of_key(key)
+    #Key does not belong to this replica's shard (based on its hash)
+    if socket_address not in shards[shard_id]:
+        correct_shard_replica = shards[shard_id][0]
+        forward_url = f"http://{correct_shard_replica}/kvs/{key}"
+        response = requests.request(request.method, forward_url, json=request.get_json(), headers={"Content-Type": "application/json"})
+        return jsonify(response.json()), response.status_code        #SHOULD RETURN SHARD ID ASWELL !!!!!
     if request.method == 'PUT':
         data = request.get_json()   #returns dictionary
         if data and ('value' in data) and ('causal-metadata' in data):
@@ -206,12 +241,12 @@ def kvs(key):
                 if key in storage:    #key already exists
                     storage[key] = value
                     vc.increment(socket_address)
-                    broadcast_to_replicas(request.method, key, data)
+                    broadcast_to_replicas(request.method, key, data, shard_id)
                     return jsonify({"result": "replaced", "causal-metadata": {"message-clock": vc.clock}}), 200 #INCLUDE NEW METADATA
                 else:   #key does not exist
                     storage[key] = value
                     vc.increment(socket_address)
-                    broadcast_to_replicas(request.method, key, data)
+                    broadcast_to_replicas(request.method, key, data, shard_id)
                     return jsonify({"result": "created", "causal-metadata": {"message-clock": vc.clock}}), 201 #INCLUDE NEW METADATA
             else:
                 return jsonify({"error": "Causal dependencies not satisfied; try again later"}), 503
@@ -243,7 +278,7 @@ def kvs(key):
                 if key in storage:
                     storage.pop(key)
                     vc.increment(socket_address)
-                    broadcast_to_replicas(request.method, key, data)
+                    broadcast_to_replicas(request.method, key, data, shard_id)
                     return jsonify({"result": "deleted", "causal-metadata": {"message-clock": vc.clock}}), 200 #INCLUDE NEW METADATA
                 else:
                     return jsonify({"error": "Key does not exist"}), 404
@@ -284,13 +319,66 @@ def view():
         else:
             return jsonify({"error": "DELETE request does not specify a socket-address"})
 
+@app.route('/update_metadata', methods=['PUT'])
+def update_metadata():
+    data = request.get_json() #data = causal metadata
+    if 'causal-metadata' in data:
+        metadata = data['causal-metadata']
+        if handle_replica_metadata(metadata):
+            return jsonify({"result": "metadata updated"}), 200
+        else:
+            return jsonify({"result": "metadata failed to update"}), 503 #RETRY UNTIL SUCCESS HERE
+    else:
+        return jsonify({"error": "Request does not contain 'causal-metadata'"}), 400
+
+     
+@app.route('/shard/ids', methods=['GET'])
+def get_shard_ids():
+    return jsonify({"shard-ids": list(shards.keys())}), 200
+
+@app.route('/shard/node-shard-id', methods=['GET'])
+def get_node_shard_ids():
+    for shard_id, nodelist in shards.items():
+        if socket_address in nodelist:
+            return jsonify({"node-shard-id": shard_id}), 200
+    return jsonify({"node-shard-id": "Not found(should not occur)"}), 404
+
+@app.route('/shard/members/<ID>', methods=['GET'])
+def get_members(ID):
+    if int(ID) in shards:
+        return jsonify({"shard-members": shards[int(ID)]}), 200
+    else:
+        return jsonify({"shard-members": "Not found"}), 400
+    
+@app.route('/shard/key-count/<ID>', methods=['GET'])
+def get_keycount(ID):
+    shard_id = int(ID)
+    if shard_id in shards:
+        counter = 0
+        if socket_address in shards[shard_id]:
+            return jsonify({"shard-key-count": len(storage)}), 200
+        else:
+            correct_shard_replica = shards[shard_id][0]
+            url = f"http://{correct_shard_replica}/shard/key-count/{shard_id}"
+            try:
+                response = requests.get(url)
+                return jsonify(response.json(), response.status_code)
+            except requests.exceptions.RequestException as e:
+                app.logger.debug(f'get_keycount error: exception raised: {e}')
+    else:
+        return jsonify({"error": "Shard does not exist"}), 404
+
+    
+
+
 
 
 
 if __name__ == '__main__':
     storage = {}
     replicas = [] #List of all replica addresses
-    #Load environment variables and VectorClock
+    shards = {}
+    shard_count = 0
     try:
         socket_address = os.environ.get('SOCKET_ADDRESS')
         viewenv = os.environ.get('VIEW').split(',')
@@ -298,6 +386,22 @@ if __name__ == '__main__':
         vc = VectorClock(replicas)
     except:
         print("No environment variables detected.")
+    
+    #On initial startup, all nodes are given shardcount, but afterwards, nodes must be assigned
+    try:
+        shard_count = int(os.environ.get('SHARD_COUNT'))
+    except:
+        print("Shard_count not specified, wait for add-member request")
+    shards = {i: [] for i in range(shard_count)} #initializes shards list, maps shard_count amount of shards to empty lists
+    shard_id = 0
+    #Iterate through our shard dictionary adding each node to one shard at a time for even distribution
+    for replica in replicas:
+        if shard_id == shard_count:
+            shard_id = 0
+        shards[shard_id].append(replica)
+        shard_id += 1
+    print(shards)
+    #Load environment variables and VectorClock
     broadcast_put_view(socket_address)
     initialize_kvs()
     host, port = os.getenv("SOCKET_ADDRESS").split(':')
