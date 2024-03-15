@@ -6,7 +6,7 @@ import hashlib
 
 app = Flask(__name__)
 
-# logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG)
 
 # print(replicas)
 ERRMSG = "Method Not Allowed"
@@ -184,6 +184,7 @@ def handle_replica_metadata(metadata):
 
 #Shard assignment by hash of key, each key is assigned a unique shard based on its keyhash
 def hash_of_key(key):
+    app.logger.debug(f'shard count is {shard_count}')
     keyhash = int(hashlib.md5(key.encode('utf-8')).hexdigest(), 16)
     return keyhash % shard_count
 
@@ -433,7 +434,63 @@ def broadcast_add_member(ID):
     else:
         return 400 # unkown error (temporary)
 
+@app.route('/shard/reshard')
+def reshard():
 
+    num_shards = float(request.get_json()['shard_count'])
+    lengthfloat = float(len(replicas))
+    if (lengthfloat / num_shards) < 2:
+        return jsonify({"error": "Not enough nodes to provide fault tolerance with requested shard count"}), 400
+    else:
+        global shard_count 
+        shard_count = num_shards
+        localshard = -1
+        shards = {}
+        # for i in range(num_shards):    #reassigns list with all shards numbered
+        #     shard_list[i] = i
+        replicas.sort()
+        for x in range (len(replicas)):
+            shard = x % num_shards
+            shards[shard].append(replicas[x]) #assigns each IP a shard in the global view
+            if replicas[x] == socket_address:
+                localshard = shard    #set local shard id
+        
+        for replica in replicas:
+            url = f"http://{replica}/shard/reshard/broadcasted" 
+            response = requests.put(url, json=request.get_json())
+
+        for key in storage:
+            keyshard = hash_of_key(key)
+            if localshard != keyshard:
+                broadcast_to_replicas('PUT', key, storage[key], keyshard)
+                del storage[key]  #delete item from local storage
+
+@app.route('/shard/reshard/broadcasted')
+def reshard_broadcasted():
+
+    num_shards = float(request.get_json()['shard_count'])
+    lengthfloat = float(len(replicas))
+    if (lengthfloat / num_shards) < 2:
+        return jsonify({"error": "Not enough nodes to provide fault tolerance with requested shard count"}), 400
+    else:
+        global shard_count 
+        shard_count = num_shards
+        localshard = -1
+        shards = {}
+        # for i in range(num_shards):    #reassigns list with all shards numbered
+        #     shard_list[i] = i
+        replicas.sort()
+        for x in range (len(replicas)):
+            shard = x % num_shards
+            shards[shard].append(replicas[x]) #assigns each IP a shard in the global view
+            if replicas[x] == socket_address:
+                localshard = shard    #set local shard id
+
+        for key in storage:
+            keyshard = hash_of_key(key)
+            if localshard != keyshard:
+                broadcast_to_replicas('PUT', key, storage[key], keyshard)
+                del storage[key]  #delete item from local storage
 
 
 
