@@ -251,6 +251,7 @@ def kvs(key):
         forward_url = f"http://{correct_shard_replica}/kvs/{key}"
         response = requests.request(request.method, forward_url, json=request.get_json(), headers={"Content-Type": "application/json"})
         return jsonify(response.json()), response.status_code        #SHOULD RETURN SHARD ID ASWELL !!!!!
+    
     if request.method == 'PUT':
         data = request.get_json()   #returns dictionary
         if data and ('value' in data) and ('causal-metadata' in data):
@@ -262,12 +263,12 @@ def kvs(key):
                     storage[key] = value
                     vc.increment(socket_address)
                     broadcast_to_replicas(request.method, key, data, shard_id)
-                    return jsonify({"result": "replaced", "causal-metadata": {"message-clock": vc.clock}}), 200 #INCLUDE NEW METADATA
+                    return jsonify({"result": "replaced", "causal-metadata": {"message-clock": vc.clock}, "shard-id": shard_id}), 200 #INCLUDE NEW METADATA
                 else:   #key does not exist
                     storage[key] = value
                     vc.increment(socket_address)
                     broadcast_to_replicas(request.method, key, data, shard_id)
-                    return jsonify({"result": "created", "causal-metadata": {"message-clock": vc.clock}}), 201 #INCLUDE NEW METADATA
+                    return jsonify({"result": "created", "causal-metadata": {"message-clock": vc.clock}, "shard-id": shard_id}), 201 #INCLUDE NEW METADATA
             else:
                 return jsonify({"error": "Causal dependencies not satisfied; try again later"}), 503
             
@@ -282,7 +283,7 @@ def kvs(key):
                 if key in storage:
                     value = storage[key]
                     # Could be problems below
-                    return jsonify({"result": "found", "value": value, "causal-metadata": {"message-clock": vc.clock}}), 200 #INCLUDE NEW METADATA
+                    return jsonify({"result": "found", "value": value, "causal-metadata": {"message-clock": vc.clock}, "shard-id": shard_id}), 200 #INCLUDE NEW METADATA
                 else:
                     return jsonify({"error": "Key does not exist"}), 404
             else:
@@ -299,7 +300,7 @@ def kvs(key):
                     storage.pop(key)
                     vc.increment(socket_address)
                     broadcast_to_replicas(request.method, key, data, shard_id)
-                    return jsonify({"result": "deleted", "causal-metadata": {"message-clock": vc.clock}}), 200 #INCLUDE NEW METADATA
+                    return jsonify({"result": "deleted", "causal-metadata": {"message-clock": vc.clock}, "shard-id": shard_id}), 200 #INCLUDE NEW METADATA
                 else:
                     return jsonify({"error": "Key does not exist"}), 404
             else:
@@ -382,7 +383,7 @@ def get_keycount(ID):
             url = f"http://{correct_shard_replica}/shard/key-count/{shard_id}"
             try:
                 response = requests.get(url)
-                return jsonify(response.json(), response.status_code)
+                return jsonify(response.json()), response.status_code
             except requests.exceptions.RequestException as e:
                 app.logger.debug(f'get_keycount error: exception raised: {e}')
     else:
