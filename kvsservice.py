@@ -6,7 +6,7 @@ import hashlib
 
 app = Flask(__name__)
 
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 
 # print(replicas)
 ERRMSG = "Method Not Allowed"
