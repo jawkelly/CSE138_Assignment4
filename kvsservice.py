@@ -384,8 +384,9 @@ def add_member(ID):
                 #when broadcast reaches E (node_id == SOCKET_ADDRESS)
                     #retrieve kvs and shards and vector clock from shards[shard_id][0]
             for replica in replicas:
-                url = f"http://{replica}/broadcast-add-member/{ID}"
-                response = requests.put(url, json=data)
+                if replica != socket_address:
+                    url = f"http://{replica}/shard/broadcast-add-member/{id}"
+                    response = requests.put(url, json=data)
             return jsonify({"result": "node added to shard"}), 200
         else:
             return jsonify({"error": "shard_id not found in shard_list or node_id not found in shard_view"}), 404
@@ -393,6 +394,8 @@ def add_member(ID):
         return 400 # unkown error (temporary)
 
 #Same as add-member, but does not broadcast
+#Returns 404 for new replica (when node_id == socket_address) bc shards{} is empty, so there are no shard keys.
+    #Need to make seperate case where retrieve kvs, shards, and metadata is handled before
 @app.route('/shard/broadcast-add-member/<ID>', methods=['PUT'])
 def broadcast_add_member(ID):
     id = int(ID)
@@ -430,19 +433,21 @@ if __name__ == '__main__':
     #On initial startup, all nodes are given shardcount, but afterwards, nodes must be assigned
     try:
         shard_count = int(os.environ.get('SHARD_COUNT'))
+        shards = {i: [] for i in range(shard_count)} #initializes shards list, maps shard_count amount of shards to empty lists
+        shard_id = 0
+        #Iterate through our shard dictionary adding each node to one shard at a time for even distribution
+        for replica in replicas:
+            if shard_id == shard_count:
+                shard_id = 0
+            shards[shard_id].append(replica)
+            shard_id += 1
+        print(shards)
     except:
+        shards = {}
         print("Shard_count not specified, wait for add-member request")
     ####
     #is this supposed to be on this line? shard count is still 0 at this point for new replicas
-    shards = {i: [] for i in range(shard_count)} #initializes shards list, maps shard_count amount of shards to empty lists
-    shard_id = 0
-    #Iterate through our shard dictionary adding each node to one shard at a time for even distribution
-    for replica in replicas:
-        if shard_id == shard_count:
-            shard_id = 0
-        shards[shard_id].append(replica)
-        shard_id += 1
-    print(shards)
+        
     #Load environment variables and VectorClock
     broadcast_put_view(socket_address)
     initialize_kvs()
