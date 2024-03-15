@@ -434,23 +434,27 @@ def broadcast_add_member(ID):
     else:
         return 400 # unkown error (temporary)
 
-@app.route('/shard/reshard')
+@app.route('/shard/reshard', methods=['PUT']) 
 def reshard():
 
-    num_shards = float(request.get_json()['shard_count'])
-    lengthfloat = float(len(replicas))
-    if (lengthfloat / num_shards) < 2:
+    num_shards = int(request.get_json()['shard-count'])
+    length = int(len(replicas))
+    if length < num_shards * 2:
         return jsonify({"error": "Not enough nodes to provide fault tolerance with requested shard count"}), 400
     else:
         global shard_count 
         shard_count = num_shards
         localshard = -1
+        global shards
         shards = {}
         # for i in range(num_shards):    #reassigns list with all shards numbered
         #     shard_list[i] = i
+        for x in range (num_shards):
+            shards[x] = []
         replicas.sort()
         for x in range (len(replicas)):
             shard = x % num_shards
+            app.logger.debug(f"SHARDS: {shards}")
             shards[shard].append(replicas[x]) #assigns each IP a shard in the global view
             if replicas[x] == socket_address:
                 localshard = shard    #set local shard id
@@ -464,24 +468,28 @@ def reshard():
             if localshard != keyshard:
                 broadcast_to_replicas('PUT', key, storage[key], keyshard)
                 del storage[key]  #delete item from local storage
+    return jsonify({"result": "resharded"}), 200
 
-@app.route('/shard/reshard/broadcasted')
+@app.route('/shard/reshard/broadcasted', methods=['PUT'])
 def reshard_broadcasted():
 
-    num_shards = float(request.get_json()['shard_count'])
-    lengthfloat = float(len(replicas))
-    if (lengthfloat / num_shards) < 2:
+    num_shards = int(request.get_json()['shard-count'])
+    length = int(len(replicas))
+    if length < num_shards * 2:
         return jsonify({"error": "Not enough nodes to provide fault tolerance with requested shard count"}), 400
     else:
-        global shard_count 
+        global shard_count
+        app.logger.debug(f"Shard_count: {shard_count}")
         shard_count = num_shards
         localshard = -1
+        global shards
         shards = {}
-        # for i in range(num_shards):    #reassigns list with all shards numbered
-        #     shard_list[i] = i
+        for x in range (num_shards):
+            shards[x] = []
         replicas.sort()
         for x in range (len(replicas)):
             shard = x % num_shards
+            app.logger.debug(f"SHARDS: {shards}")
             shards[shard].append(replicas[x]) #assigns each IP a shard in the global view
             if replicas[x] == socket_address:
                 localshard = shard    #set local shard id
@@ -491,6 +499,7 @@ def reshard_broadcasted():
             if localshard != keyshard:
                 broadcast_to_replicas('PUT', key, storage[key], keyshard)
                 del storage[key]  #delete item from local storage
+    return jsonify({"result": "success"}), 200
 
 
 
