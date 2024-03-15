@@ -79,7 +79,8 @@ def broadcast_put_view(sentaddress):
 
 ## Used to copy existing storage from a kvs when a new replica is made
 ## Now should also copy shards and vector clock (done in /getall)
-def initialize_kvs(): #now wait until put add-member before using this
+def initialize_kvs(id): #now wait until put add-member before using this
+    global shards
     if viewenv:
         if len(replicas) == 1: # if there is only 1 replica in the view
             return
@@ -87,6 +88,20 @@ def initialize_kvs(): #now wait until put add-member before using this
             existingreplica = replicas[1]
         else:
             existingreplica = replicas[0] #choose first replica to take storage from
+
+        #First retrieve shards dictionary so we can pull kvs from correct shard
+        try:
+            url = f'http://{existingreplica}/getshards'
+            response = requests.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                shards = {int(k): v for k, v in data["shards"].items()} #this converts all the keys to ints bc json will return them as strings
+        except requests.exceptions.RequestException as e:
+            print(f"initialize_kvs failed:  exception raised {e}")
+
+        # app.logger.debug(shards)
+        #change existing replica to be a replica in shards so we can pull data from the correct shard
+        existingreplica = shards[id][0]
         try:
             url = f'http://{existingreplica}/getall'
             response = requests.get(url)
@@ -171,6 +186,10 @@ def handle_replica_metadata(metadata):
 def hash_of_key(key):
     keyhash = int(hashlib.md5(key.encode('utf-8')).hexdigest(), 16)
     return keyhash % shard_count
+
+@app.route('/getshards', methods=['GET'])
+def getshards():
+    return jsonify({"shards": shards}), 200
 
 @app.route('/getall', methods=['GET'])
 def getall():
@@ -376,13 +395,11 @@ def add_member(ID):
     if request.method == 'PUT':
         data = request.get_json()
         node_id = data.get('socket-address')
+        if node_id == socket_address:
+                initialize_kvs(id)
         if id in list(shards.keys()) and node_id in replicas:
             # add {"node_id": shard_id} to shard_view
             shards[id].append(node_id)
-            #retrieve kvs if socketaddress is in shards[shard_id]
-            #broadcast add-member to all other replicas (new endpoint so it doesnt keep broadcasting)
-                #when broadcast reaches E (node_id == SOCKET_ADDRESS)
-                    #retrieve kvs and shards and vector clock from shards[shard_id][0]
             for replica in replicas:
                 if replica != socket_address:
                     url = f"http://{replica}/shard/broadcast-add-member/{id}"
@@ -402,6 +419,8 @@ def broadcast_add_member(ID):
     if request.method == 'PUT':
         data = request.get_json()
         node_id = data.get('socket-address')
+        if node_id == socket_address:
+                initialize_kvs(id)
         if id in list(shards.keys()) and node_id in replicas:
             # add {"node_id": shard_id} to shard_view
             shards[id].append(node_id)
@@ -445,11 +464,9 @@ if __name__ == '__main__':
     except:
         shards = {}
         print("Shard_count not specified, wait for add-member request")
-    ####
-    #is this supposed to be on this line? shard count is still 0 at this point for new replicas
+    
         
     #Load environment variables and VectorClock
     broadcast_put_view(socket_address)
-    initialize_kvs()
     host, port = os.getenv("SOCKET_ADDRESS").split(':')
     app.run(host=host, port=port)
