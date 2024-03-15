@@ -368,46 +368,47 @@ def get_keycount(ID):
                 app.logger.debug(f'get_keycount error: exception raised: {e}')
     else:
         return jsonify({"error": "Shard does not exist"}), 404
-    
-@app.route('/shard/add-member/<shard_id>', methods=['PUT'])
-def add_member(shard_id):
+
+#For client request to add-member
+@app.route('/shard/add-member/<ID>', methods=['PUT'])
+def add_member(ID):
+    id = int(ID)
     if request.method == 'PUT':
         data = request.get_json()
-        node_id = data.get('socket_address')
-        if shard_id in shards.keys() and node_id in replicas:
+        node_id = data.get('socket-address')
+        if id in list(shards.keys()) and node_id in replicas:
             # add {"node_id": shard_id} to shard_view
-            shards[shard_id].append(node_id)
+            shards[id].append(node_id)
             #retrieve kvs if socketaddress is in shards[shard_id]
             #broadcast add-member to all other replicas (new endpoint so it doesnt keep broadcasting)
                 #when broadcast reaches E (node_id == SOCKET_ADDRESS)
                     #retrieve kvs and shards and vector clock from shards[shard_id][0]
-            
-            return jsonify({"result": "node added to shard"}), 200
-        else:
-            return jsonify({"error": "shard_id not found in shard_list or node_id not found in shard_view"}), 404
-    else:
-        return 400 # unkown error (temporary)
-    
-@app.route('/shard/add-member-broadcast/<shard_id>', methods=['PUT'])
-def add_member(shard_id):
-    if request.method == 'PUT':
-        data = request.get_json()
-        node_id = data.get('socket_address')
-        if shard_id in shards.keys() and node_id in replicas:
-            # add {"node_id": shard_id} to shard_view
-            shards[shard_id].append(node_id)
-            #retrieve kvs if socketaddress is in shards[shard_id]
-            #broadcast add-member to all other replicas (new endpoint so it doesnt keep broadcasting)
-                #when broadcast reaches E (node_id == SOCKET_ADDRESS)
-                    #retrieve kvs and shards and vector clock from shards[shard_id][0]
-            
+            for replica in replicas:
+                url = f"http://{replica}/broadcast-add-member/{ID}"
+                response = requests.put(url, json=data)
             return jsonify({"result": "node added to shard"}), 200
         else:
             return jsonify({"error": "shard_id not found in shard_list or node_id not found in shard_view"}), 404
     else:
         return 400 # unkown error (temporary)
 
-    
+#Same as add-member, but does not broadcast
+@app.route('/shard/broadcast-add-member/<ID>', methods=['PUT'])
+def broadcast_add_member(ID):
+    id = int(ID)
+    if request.method == 'PUT':
+        data = request.get_json()
+        node_id = data.get('socket-address')
+        if id in list(shards.keys()) and node_id in replicas:
+            # add {"node_id": shard_id} to shard_view
+            shards[id].append(node_id)
+            # if(node_id == socket_address):
+                #retrieve kvs, shards, and vector clock
+            return jsonify({"result": "node added to shard"}), 200
+        else:
+            return jsonify({"error": "shard_id not found in shard_list or node_id not found in shard_view"}), 404
+    else:
+        return 400 # unkown error (temporary)
 
 
 
