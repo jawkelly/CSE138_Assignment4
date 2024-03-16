@@ -3,11 +3,11 @@
 This program is a sharded, replicated, fault tolerant, and causally consistent key value store.  
 Replicas communicate key-value updates within their shards, keeping everything up to date.  
 Each shard is responsible for handling a portion of key-value pairs, which are all agreed upon  
-by a method of hash of key. This way, nodes can tell which shard a key value pair should go to.
+by a method of hash of key. This way, nodes can tell which shard a key value pair should go to.  
 The distributed system is fault tolerant, which means that when one of the replicas goes  
 down almost no data is lost. This program supports *view* operations; PUT, GET, and   
 DELETE which are responsible for managing the replicas. The same operations are available  
-for the Key Value Store. The program also supports *shard* operations, which determines how
+for the Key Value Store. The program also supports *shard* operations, which determines how  
 many 'shards' the database is split up into.
   
 ## KEY-TO-SHARD MAPPING MECHANISM
