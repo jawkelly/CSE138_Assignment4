@@ -3,6 +3,7 @@ import requests
 import os
 import logging
 import hashlib
+import time
 
 app = Flask(__name__)
 
@@ -119,6 +120,9 @@ def broadcast_delete_view(sent_address):
     data = {'socket-address': sent_address}
     replicas.remove(sent_address) # remove from view here
     vc.delete_replica(sent_address)
+    for shard in range(shard_count):
+        if socket_address in shards[shard]:
+            shards[shard].remove(socket_address)
     for replica in replicas:
         if replica != sent_address:
             try:
@@ -138,6 +142,9 @@ def broadcast_to_replicas(method, key, data, shard_id):
             try:
                 replica_url = f'http://{replica}/replica_kvs/{key}'
                 response = requests.request(method, replica_url, json=data)
+                while response.status_code == 503:
+                    time.sleep(1)
+                    response = requests.request(method, replica_url, json=data)
             except requests.exceptions.RequestException as e:
                 broadcast_delete_view(replica)
                 app.logger.debug(f'broadcast_to_replicas error: exception raised: {e}')
@@ -148,7 +155,10 @@ def broadcast_to_replicas(method, key, data, shard_id):
             for replica in other_id_replicas:
                 try:
                     url = f'http://{replica}/update_metadata'
-                    requests.put(url, json={"causal-metadata": data["causal-metadata"]})
+                    response = requests.put(url, json={"causal-metadata": data["causal-metadata"]})
+                    while response.status_code == 503:
+                        time.sleep(1)
+                        response = requests.request(method, replica_url, json=data)
                 except requests.exceptions.RequestException as e:
                     broadcast_delete_view(replica)
                     app.logger.debug(f'broadcast_to_replicas error: exception raised: {e}')
@@ -203,7 +213,7 @@ def redistribute_keys():
                     try:
                         url = f"http://{correct_node}/kvs/{key}"
                         response = requests.put(url, json=data, headers={"Content-Type": "application/json"})
-                    except:
+                    except requests.exceptions.RequestException as e:
                         app.logger.error(f"exception raised in redistribute_keys: {e}")
 
             deleted_keys.append(key)
@@ -360,6 +370,9 @@ def view():
             if socket_address in replicas:
                 replicas.remove(socket_address)
                 vc.delete_replica(socket_address)
+                for shard in range(shard_count):
+                    if socket_address in shards[shard]:
+                        shards[shard].remove(socket_address)
                 return jsonify({"result": "deleted"}), 200
             else:
                 return jsonify({"error": "View has no such replica"}), 404
