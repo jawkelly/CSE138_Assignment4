@@ -12,5 +12,5 @@ RUN pip install requests apscheduler Flask
 
 EXPOSE 8090
 
-CMD ["python", "jack_kvsservice.py"]
+CMD ["python", "kvsservice.py"]
 
