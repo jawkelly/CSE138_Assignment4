@@ -11,6 +11,12 @@ for the Key Value Store. The program also supports *shard* operations, which det
 many 'shards' the database is split up into.
   
 ## KEY-TO-SHARD MAPPING MECHANISM
+The key to shard mapping mechanim uses hashing to determine which shard the key belongs to. 
+Hashing provides a deterministic way to find the correct shard for the key. The hash value 
+obtained from hashing the key is then used to determine the shard to which the key belongs. 
+This is typically done by taking the modulus (%) of the hash value with the total number of 
+shards (shard_count). The result is an integer representing the shard ID. By using a 
+hash function the kv pairs will have an even distribution across the shards. 
 
   
 ## RESHARDING MECHANISM
@@ -27,10 +33,11 @@ shard.
 ### TEAM CONTRIBUTIONS    
 Hunter Shepston - Implemented Get shard functions and initial Reshard function.
 
-Ali Ali - Implemented Heartbeat functions, for requesting and sending. Created view functions
+Ali Ali - Implemented handling of key value operations so that they work properly 
+on shards. Worked on shard initialization and helped with /shard requests.
 
-Jack - Implemented vector clock functionality via Causal Broadcast Delivery. Helped with view 
-functions
+Jack - Implemented causal-consistency and down detection that was missing from the last 
+assignment. Created the initial shard/add-member function.
 
 ### AKNOWLEDGEMENTS  
 We did not consult anyone outside of this group
