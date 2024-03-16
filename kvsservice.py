@@ -188,6 +188,31 @@ def hash_of_key(key):
     keyhash = int(hashlib.md5(key.encode('utf-8')).hexdigest(), 16)
     return keyhash % shard_count
 
+#Key redistribution to be used when resharding is done
+def redistribute_keys():
+    global storage
+    deleted_keys = []
+    for key, value in storage.items():
+        correct_shard = hash_of_key(key)
+        app.logger.debug(f'key is {key}, shard is {correct_shard}')
+        if socket_address not in shards[correct_shard]:
+            data = {{"value": value, "causal-metadata": {"message-clock": vc.clock}}}
+
+            for correct_node in shards[correct_shard]:
+                if correct_node != socket_address:
+                    try:
+                        url = f"http://{correct_node}/kvs/{key}"
+                        response = requests.put(url, json=data, headers={"Content-Type": "application/json"})
+                    except:
+                        app.logger.error(f"exception raised in redistribute_keys: {e}")
+
+            deleted_keys.append(key)
+    for key in deleted_keys:
+        del storage[key]
+    
+    app.logger.debug(f'storage is now {storage}')
+
+
 @app.route('/getshards', methods=['GET'])
 def getshards():
     return jsonify({"shards": shards}), 200
@@ -447,60 +472,73 @@ def reshard():
         localshard = -1
         global shards
         shards = {}
-        # for i in range(num_shards):    #reassigns list with all shards numbered
-        #     shard_list[i] = i
+        
+        #Change shards list to match reshard
         for x in range (num_shards):
             shards[x] = []
         replicas.sort()
         for x in range (len(replicas)):
             shard = x % num_shards
-            app.logger.debug(f"SHARDS: {shards}")
             shards[shard].append(replicas[x]) #assigns each IP a shard in the global view
             if replicas[x] == socket_address:
                 localshard = shard    #set local shard id
         
         for replica in replicas:
-            url = f"http://{replica}/shard/reshard/broadcasted" 
-            response = requests.put(url, json=request.get_json())
+            try:
+                url = f"http://{replica}/shard/reshard/update_shards" 
+                response = requests.put(url, json={"new_shards": shards})
+            except requests.exceptions.RequestException as e:
+                app.logger.debug(f"exception raised in reshard: {e}")
 
-        for key in storage:
-            keyshard = hash_of_key(key)
-            if localshard != keyshard:
-                broadcast_to_replicas('PUT', key, storage[key], keyshard)
-                del storage[key]  #delete item from local storage
-    return jsonify({"result": "resharded"}), 200
+        #NOW ALL REPLICAS SHOULD HAVE UPDATE SHARDS{}
 
-@app.route('/shard/reshard/broadcasted', methods=['PUT'])
-def reshard_broadcasted():
+        fullstorage = {}
+        for replica in replicas:
+            try:
+                response = requests.get(f"http://{replica}/get_fullstorage")
+                fullstorage.update(response.json())
+            except Exception as e:
+                app.logger.error(f"exception when attempting /get_fullstorage: {replica}: {e}")
+            #Map shards to their storage
+            new_storage = {shard: {} for shard in range(shard_count)}
 
-    num_shards = int(request.get_json()['shard-count'])
-    length = int(len(replicas))
-    if length < num_shards * 2:
-        return jsonify({"error": "Not enough nodes to provide fault tolerance with requested shard count"}), 400
+        #Redistribute keys to their corresponding shard
+        for key, value in fullstorage.items():
+            keyshard = hash_of_key(key) % shard_count
+            new_storage[keyshard][key] = value
+
+        #Update each replica with their storage based on their shard
+        for shard_id, shard_store in new_storage.items():
+            for replica in shards[shard_id]:
+                try:
+                    response = requests.put(f"http://{replica}/update_storage", json=shard_store)
+                except Exception as e:
+                    app.logger.error(f"exception when attempting /update_storage: {e}")
+        return jsonify({"result": "resharded"}), 200
+
+@app.route('/shard/reshard/update_shards', methods=['PUT'])
+def update_shards():
+    data = request.get_json()
+    global shards
+    incomingshards = data.get('new_shards', {})
+    shards = {int(k): v for k, v in incomingshards.items()}
+    global shard_count 
+    shard_count = len(shards)
+    redistribute_keys()
+    if shards:
+        return jsonify({"result": "shards list updated"}), 200
     else:
-        global shard_count
-        app.logger.debug(f"Shard_count: {shard_count}")
-        shard_count = num_shards
-        localshard = -1
-        global shards
-        shards = {}
-        for x in range (num_shards):
-            shards[x] = []
-        replicas.sort()
-        for x in range (len(replicas)):
-            shard = x % num_shards
-            app.logger.debug(f"SHARDS: {shards}")
-            shards[shard].append(replicas[x]) #assigns each IP a shard in the global view
-            if replicas[x] == socket_address:
-                localshard = shard    #set local shard id
+        return jsonify({"error": "new-shard not provided"}), 400
+    
+@app.route('/update_storage', methods=['PUT'])
+def update_storage():
+    global storage
+    storage = request.get_json()
+    return jsonify({"result": "storage updated"}), 200
 
-        for key in storage:
-            keyshard = hash_of_key(key)
-            if localshard != keyshard:
-                broadcast_to_replicas('PUT', key, storage[key], keyshard)
-                del storage[key]  #delete item from local storage
-    return jsonify({"result": "success"}), 200
-
+@app.route('/get_fullstorage', methods=['GET'])
+def get_fullstorage():
+    return jsonify(storage), 200
 
 
 if __name__ == '__main__':
